@@ -4,6 +4,7 @@
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
+#include <setjmp.h>
 
 /*
    IPv4: xxx[.yyy[.zzz[.www]]][/ii]
@@ -11,25 +12,38 @@
 int get_ip_and_cidr(char *str, uint32_t *ip, int *cidr)
 {
   char *p, *q, *r;
+  char *t;
   unsigned long l;
+  jmp_buf jb;
 
   // Ignore initial spaces...
   while (isspace(*str)) str++;
 
+  t = strdup(str);
+
+  if (setjmp(jb))
+  {
+    free(t);
+    return 0;
+  }
+
+  p = t + strlen(t) - 1;
+  while (p >= t && isspace(*p)) *p-- = '\0';
+
   // Empty string is a special case...
-  if (!*str) return 0;
+  if (!*t) longjmp(jb, 1);
 
   *cidr = 0;
   *ip = 0;
   errno = 0;
-  l = strtoul(str, &q, 10);
+  l = strtoul(t, &q, 10);
   r = (char *)ip;
 
   // if still has chars on the string...
   while (*q && !errno)
   {
     // is it a invalid octect?
-    if (l > 255) return 0;
+    if (l > 255) longjmp(jb, 1);
 
     if (*q == '.')
     { 
@@ -52,18 +66,18 @@ int get_ip_and_cidr(char *str, uint32_t *ip, int *cidr)
 
         // nulchar is expected at this point...
         if (*q || errno)
-          return 0;
+          longjmp(jb, 1);
 
         // is it an invalid cidr?
         if (l < 1 || l > 32) 
-          return 0;
+          longjmp(jb, 1);
 
         *cidr = l;
         break;
       }
       else
         if (*q)
-          return 0;
+          longjmp(jb, 1);
 
     errno = 0;
     p = q + 1;
@@ -75,6 +89,8 @@ int get_ip_and_cidr(char *str, uint32_t *ip, int *cidr)
       break;
     }
   }
+
+  free(t);
 
   // any convertion errors found?
   if (errno)
@@ -90,9 +106,24 @@ int get_ip_and_cidr(char *str, uint32_t *ip, int *cidr)
 void main(void)
 {
   // I need to make some more tests here!
-  char *str[] = { "", " ", "10/8", "10.1/16", "10.1.2/24", "10.1.2.3/32", "teste/31", 
-                  "1.2.3.4/", "256.0.0.0/32", "10.0.0.1/33", "10.1./16", "10.1.2./16", 
-                  "1.2.3.4", "1.2.3", "10.11.12.", NULL };
+  char *str[] = { "",               // invalid.
+                  " ",              // invalid.
+                  "10/8", 
+                  "10.1/16", 
+                  "10.1.2/24", 
+                  "10.1.2.3/32",
+                  "10.1.2.3.4/32",  // invalid. 
+                  "teste/31",       // invalid.
+                  "1.2.3.4/",       // invalid.
+                  "256.0.0.0/32",   // invalid.
+                  "10.0.0.1/33",    // invalid.
+                  "10.1./16",  
+                  "10.1.2./16",
+                  "1.2.3.4",
+                  "1.2.3",
+                  "10.11.12.",
+                  "10.11.12.13 ",
+                  NULL };
   char **p = str;
   uint32_t ip;
   int cidr;
